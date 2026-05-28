@@ -1,0 +1,7 @@
+xray
+xrayconfig.json
+configs.txt
+__pycache__/
+*.pyc
+.DS_Store
+venv/
