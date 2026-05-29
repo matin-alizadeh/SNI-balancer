@@ -550,7 +550,7 @@ def _get_launch_instructions(binary_path, config_path, variant):
     if variant == "rust":
         cmd = f"{binary_path} {config_path}"
     else:
-        cmd = f"{binary_path} -c {config_path}"
+        cmd = f"{binary_path} -config {config_path}"
 
     if sys.platform == "win32":
         return (
