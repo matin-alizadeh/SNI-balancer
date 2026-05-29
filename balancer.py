@@ -66,7 +66,6 @@ XRAY_CONFIG = os.path.join(
 HISTORY_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "config_history.json"
 )
-global SOCKS_PORT, SPEED_TEST_SIZE
 SOCKS_PORT = 4567
 SOCKS_LISTEN = "0.0.0.0"
 SNI_PORT = 40443
@@ -381,7 +380,11 @@ def _get_sni_asset_name(variant):
 # ── SNI config file creation ───────────────────────────────────────────────────────
 
 
-def create_sni_config(variant, connect=SNI_CONNECT, fake_sni=SNI_FAKE_SNI):
+def create_sni_config(variant, connect=None, fake_sni=None):
+    if connect is None:
+        connect = SNI_CONNECT
+    if fake_sni is None:
+        fake_sni = SNI_FAKE_SNI
     if variant == "rust":
         config = {
             "listeners": [
@@ -674,7 +677,11 @@ def calculate_score(
 
         latency_score = max(0.0, 1.0 - (avg_latency / 1000.0))
 
-        final_score = speed_score * 0.4 + latency_score * 0.3 + stability_score * 0.3
+        final_score = (
+            speed_score * W_SPEED
+            + latency_score * (1 - W_SPEED - W_STABILITY)
+            + stability_score * W_STABILITY
+        )
 
         return final_score
 
@@ -1065,7 +1072,7 @@ def launch_xray(server, current_proc):
 
 async def health_check(port: int) -> tuple[bool, int]:
     proxy_url = f"socks5://127.0.0.1:{port}"
-    connector = None
+    connector = ProxyConnector.from_url(proxy_url)
     timeout = aiohttp.ClientTimeout(
         total=HEALTH_TIMEOUT,
         connect=3,
@@ -1074,7 +1081,6 @@ async def health_check(port: int) -> tuple[bool, int]:
     start = time.perf_counter()
 
     try:
-        connector = ProxyConnector.from_url(proxy_url)
         async with aiohttp.ClientSession(
             connector=connector,
             timeout=timeout,
@@ -1461,7 +1467,7 @@ def should_switch(current_config_name, ranked_results):
     )
     if improvement > SWITCH_THRESHOLD:
         logger.info(
-            f"Switching from {current_config_name} to {ranked[0][0]['name']} (improvement: {improvement:.1%})"
+            f"Switching from {current_config_name} to {ranked_results[0][0]['name']} ..."
         )
     else:
         logger.info(
@@ -1474,6 +1480,7 @@ def should_switch(current_config_name, ranked_results):
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    global SOCKS_PORT, SPEED_TEST_SIZE, SNI_CONNECT, SNI_FAKE_SNI
     parser = argparse.ArgumentParser(
         description="Xray intelligent proxy balancer with smart testing and Rich TUI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1606,7 +1613,7 @@ if __name__ == "__main__":
                                     speed_diff = best_speed - old_entry[1]
                                     latency_diff = old_entry[3] - best_latency
                                     console.print(
-                                        f"[cyan]  Speed: {speed_diff:+.2f} MB/s | Latency: {latency_diff:+.2f}s[/cyan]"
+                                        f"[cyan]  Speed: {speed_diff:+.2f} MB/s | Latency: {latency_diff:+d}ms[/cyan]"
                                     )
                         else:
                             console.print("[red]Failed to launch new config![/red]")
