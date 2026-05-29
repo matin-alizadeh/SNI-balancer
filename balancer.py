@@ -1115,41 +1115,75 @@ def launch_xray(server, current_proc):
 # ── Smart two-stage testing ────────────────────────────────────────────────────
 
 
-async def health_check(port: int) -> tuple[bool, int]:
-    proxy_url = f"socks5://127.0.0.1:{port}"
-    connector = ProxyConnector.from_url(proxy_url)
-    timeout = aiohttp.ClientTimeout(
-        total=HEALTH_TIMEOUT,
-        connect=8,
-    )
+# async def health_check(port: int) -> tuple[bool, int]:
+#     proxy_url = f"socks5://127.0.0.1:{port}"
+#     connector = ProxyConnector.from_url(proxy_url)
+#     timeout = aiohttp.ClientTimeout(
+#         total=HEALTH_TIMEOUT,
+#         connect=8,
+#     )
 
+#     start = time.perf_counter()
+
+#     try:
+#         async with aiohttp.ClientSession(
+#             connector=connector,
+#             timeout=timeout,
+#         ) as session:
+#             async with session.get(
+#                 HEALTH_URL,
+#                 allow_redirects=False,
+#             ) as response:
+#                 latency_ms = int((time.perf_counter() - start) * 1000)
+
+#                 success = response.status == 204
+
+#                 return success, latency_ms
+
+#     except Exception:
+#         return False, 0
+
+#     finally:
+#         if not connector.closed:
+#             await connector.close()
+
+
+# async def _run_health_checks(port, count):
+#     return await asyncio.gather(*[health_check(port) for _ in range(count)])
+
+
+async def _curl_health_check(port):
+    dn = "/dev/null" if sys.platform != "win32" else "NUL"
+    CURL = "curl" if sys.platform != "win32" else "curl.exe"
     start = time.perf_counter()
-
     try:
-        async with aiohttp.ClientSession(
-            connector=connector,
-            timeout=timeout,
-        ) as session:
-            async with session.get(
-                HEALTH_URL,
-                allow_redirects=False,
-            ) as response:
-                latency_ms = int((time.perf_counter() - start) * 1000)
-
-                success = response.status == 204
-
-                return success, latency_ms
-
+        proc = await asyncio.create_subprocess_exec(
+            CURL,
+            "-s",
+            "-o",
+            dn,
+            "-w",
+            "%{http_code}",
+            "--proxy",
+            f"socks5h://127.0.0.1:{port}",
+            "--connect-timeout",
+            "5",
+            "--max-time",
+            str(HEALTH_TIMEOUT),
+            HEALTH_URL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        success = stdout.decode().strip() == "200"
+        return success, latency_ms
     except Exception:
         return False, 0
 
-    finally:
-        if not connector.closed:
-            await connector.close()
-
 
 async def _run_health_checks(port, count):
-    return await asyncio.gather(*[health_check(port) for _ in range(count)])
+    return await asyncio.gather(*[_curl_health_check(port) for _ in range(count)])
 
 
 def measure_speed(port, test_size=None):
