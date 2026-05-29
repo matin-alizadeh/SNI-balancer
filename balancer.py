@@ -71,7 +71,7 @@ SOCKS_LISTEN = "0.0.0.0"
 SNI_PORT = 40443
 BASE_TEST_PORT = 19000
 TEST_URL = "https://speed.cloudflare.com/__down?bytes=1000000"
-HEALTH_URL = "http://www.gstatic.com/generate_204"
+HEALTH_URL = "https://www.apple.com/library/test/success.html"
 TEST_TIMEOUT = 15
 HEALTH_TIMEOUT = 5
 CHECK_INTERVAL = 30 * 60
@@ -430,6 +430,9 @@ def _download_sni_binary(variant):
     api_url = SNI_RUST_API if variant == "rust" else SNI_GO_API
     dest_bin = SNI_RUST_BINARY if variant == "rust" else SNI_GO_BINARY
     dest = os.path.join(SCRIPT_DIR, dest_bin)
+    win_files = (
+        ["WinDivert.dll", "WinDivert64.sys"] if sys.platform == "win32" else None
+    )
 
     try:
         response = requests.get(api_url, timeout=10)
@@ -480,6 +483,11 @@ def _download_sni_binary(variant):
                 logger.error("Binary not found inside zip")
                 console.print("[red]Binary not found inside zip[/red]")
                 return False
+            if win_files and variant == "rust":
+                for file in win_files:
+                    extracted = os.path.join(tmp_dir, file)
+                    win_dest = os.path.join(SCRIPT_DIR, file)
+                    shutil.move(extracted, win_dest)
             shutil.move(extracted, dest)
         else:
             shutil.move(download_path, dest)
@@ -504,7 +512,7 @@ def _download_sni_binary(variant):
 # ── SNI orchestrator ──────────────────────────────────────────────────────────
 def _get_launch_instructions(binary_path, config_path, variant):
     if variant == "rust":
-        cmd = f"{binary_path} --config {config_path}"
+        cmd = f"{binary_path} {config_path}"
     else:
         cmd = f"{binary_path} -c {config_path}"
 
@@ -1092,7 +1100,7 @@ async def health_check(port: int) -> tuple[bool, int]:
             ) as response:
                 latency_ms = int((time.perf_counter() - start) * 1000)
 
-                success = response.status == 204
+                success = response.status == 200
 
                 return success, latency_ms
 
@@ -1114,6 +1122,9 @@ async def _run_health_checks(port, count):
 def measure_speed(port, test_size=None):
     if test_size is None:
         test_size = SPEED_TEST_SIZE
+    sd = "%{speed_download}" if sys.platform != "win32" else "'%{speed_download}'"
+    dn = "/dev/null" if sys.platform != "win32" else "NUL"
+    CURL = "curl" if sys.platform != "win32" else "curl.exe"
     try:
         size_mb = int(test_size)
         test_url = (
@@ -1124,12 +1135,12 @@ def measure_speed(port, test_size=None):
 
         result = subprocess.run(
             [
-                "curl",
+                CURL,
                 "-s",
                 "-o",
-                "/dev/null",
+                dn,
                 "-w",
-                "%{speed_download}",
+                sd,
                 "--proxy",
                 f"socks5h://127.0.0.1:{port}",
                 "--connect-timeout",
@@ -1182,9 +1193,10 @@ def test_server_smart(
     display_name = server.get("display_name", config_name)
     console.print(f"  Testing [cyan]{display_name}[/cyan]...", end=" ")
     ping_num = 3
-    checks = asyncio.run(_run_health_checks(port, ping_num + 1))
-    healthy = checks[0][0]
-    latency = sum(r[1] for r in checks[1:]) // ping_num if healthy else 0
+    checks = asyncio.run(_run_health_checks(port, ping_num))
+    h_checks = [i[0] for i in checks]
+    healthy = sum(h_checks) > len(h_checks) / 2
+    latency = sum(r[1] for r in checks) // ping_num if healthy else -1
 
     if not healthy:
         console.print("[red]✗ unhealthy[/red]")
@@ -1481,7 +1493,6 @@ def should_switch(current_config_name, ranked_results):
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    global SOCKS_PORT, SPEED_TEST_SIZE, SNI_CONNECT, SNI_FAKE_SNI
     parser = argparse.ArgumentParser(
         description="Xray intelligent proxy balancer with smart testing and Rich TUI",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -14,4 +14,5 @@ sni-spoofing
 sni-spoofing.exe
 config.json
 config.ini
+WinDivert*
 venv/
