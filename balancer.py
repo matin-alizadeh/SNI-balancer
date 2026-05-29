@@ -152,6 +152,53 @@ if sys.platform != "win32":
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
+# ── Optimized downloader ─────────────────────────────────────────────────────────
+
+
+def _download_with_resume(url, dest_path, max_retries=5, chunk_size=8192):
+    for attempt in range(max_retries):
+        existing = os.path.getsize(dest_path) if os.path.exists(dest_path) else 0
+        headers = {"Range": f"bytes={existing}-"} if existing else {}
+
+        try:
+            with requests.get(url, stream=True, timeout=30, headers=headers) as r:
+                if r.status_code == 416:
+                    return True
+                r.raise_for_status()
+
+                if existing and r.status_code == 200:
+                    existing = 0
+                    mode = "wb"
+                    downloaded = 0
+
+                total = int(r.headers.get("content-length", 0)) + existing
+                downloaded = existing
+                mode = "ab" if existing else "wb"
+
+                with open(dest_path, mode) as f:
+                    for chunk in r.iter_content(chunk_size=chunk_size):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            print(
+                                f"\r  {downloaded / total * 100:.1f}%",
+                                end="",
+                                flush=True,
+                            )
+
+                print()
+                return True
+
+        except (requests.ConnectionError, requests.Timeout, OSError) as e:
+            wait = min(2 ** (attempt + 1), 10)
+            console.print(
+                f"\n[yellow]Download interrupted ({e}), retrying in {wait}s (attempt {attempt + 1}/{max_retries})...[/yellow]"
+            )
+            time.sleep(wait)
+
+    return False
+
+
 # ── Xray check and update ─────────────────────────────────────────────────────────
 
 
@@ -201,20 +248,8 @@ def _download_and_extract_xray(asset_url, asset_name):
         console.print(f"[cyan]Downloading {asset_name}...[/cyan]")
         logger.info(f"Downloading Xray from {asset_url}")
 
-        with requests.get(asset_url, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("content-length", 0))
-            downloaded = 0
-
-            with open(zip_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        pct = downloaded / total * 100
-                        print(f"\r  {pct:.1f}%", end="", flush=True)
-
-        print()
+        if not _download_with_resume(asset_url, zip_path):
+            return False
 
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(tmp_dir)
@@ -461,19 +496,8 @@ def _download_sni_binary(variant):
         console.print(f"[cyan]Downloading {asset_name} ({tag})...[/cyan]")
         logger.info(f"Downloading {asset_name} from {asset['browser_download_url']}")
 
-        with requests.get(asset["browser_download_url"], stream=True, timeout=60) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("content-length", 0))
-            downloaded = 0
-            with open(download_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        print(
-                            f"\r  {downloaded / total * 100:.1f}%", end="", flush=True
-                        )
-        print()
+        if not _download_with_resume(asset["browser_download_url"], download_path):
+            return False
 
         if asset_type == "zip":
             with zipfile.ZipFile(download_path, "r") as z:
@@ -1113,10 +1137,7 @@ async def health_check(port: int) -> tuple[bool, int]:
 
 
 async def _run_health_checks(port, count):
-    results = []
-    for _ in range(count):
-        results.append(await health_check(port))
-    return results
+    return await asyncio.gather(*[health_check(port) for _ in range(count)])
 
 
 def measure_speed(port, test_size=None):
@@ -1196,7 +1217,12 @@ def test_server_smart(
     checks = asyncio.run(_run_health_checks(port, ping_num))
     h_checks = [i[0] for i in checks]
     healthy = sum(h_checks) > len(h_checks) / 2
-    latency = sum(r[1] for r in checks) // ping_num if healthy else -1
+    # latency mean
+    # latency = sum(r[1] for r in checks) // ping_num if healthy else -1
+    #
+    # latency median
+    latencies = sorted(r[1] for r in checks if r[0])
+    latency = latencies[len(latencies) // 2] if latencies else -1
 
     if not healthy:
         console.print("[red]✗ unhealthy[/red]")
