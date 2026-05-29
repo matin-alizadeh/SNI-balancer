@@ -8,4 +8,10 @@ __pycache__/
 .DS_Store
 balancer.log*
 .xray_version
+sni-spoof-rs
+sni-spoof-rs.exe
+sni-spoofing
+sni-spoofing.exe
+config.json
+config.ini
 venv/

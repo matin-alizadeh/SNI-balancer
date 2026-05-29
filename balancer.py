@@ -8,6 +8,8 @@ import os
 import platform
 import shutil
 import signal
+import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -84,6 +86,26 @@ HISTORY_WINDOW = 6
 # ── Smart testing thresholds ───────────────────────────────────────────────────
 SPEED_TEST_SIZE = 1
 MIN_HEALTHY_SPEED = 0.1
+
+# ── SNI Spoofing constants ─────────────────────────────────────────────────────
+
+SNI_RUST_REPO = "therealaleph/sni-spoofing-rust"
+SNI_GO_REPO = "aleskxyz/SNI-Spoofing-Go"
+SNI_RUST_API = f"https://api.github.com/repos/{SNI_RUST_REPO}/releases/latest"
+SNI_GO_API = f"https://api.github.com/repos/{SNI_GO_REPO}/releases/latest"
+
+SNI_CONNECT = "104.19.229.21:443"
+SNI_FAKE_SNI = "hcaptcha.com"
+
+SNI_RUST_BINARY = "sni-spoof-rs.exe" if sys.platform == "win32" else "sni-spoof-rs"
+SNI_GO_BINARY = "sni-spoofing.exe" if sys.platform == "win32" else "sni-spoofing"
+
+SNI_RUST_CONFIG = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "config.json"
+)
+SNI_GO_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.ini")
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── Rich console for flicker-free display ──────────────────────────────────────
 console = Console()
@@ -279,6 +301,304 @@ def ensure_xray(update=False):
     else:
         if not xray_exists:
             sys.exit(1)
+
+
+# ── Port check ─────────────────────────────────────────────────────────────────
+
+
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+# ── SNI-Spoofing binary detection ───────────────────────────────────────────────────────────
+
+
+def find_sni_binary():
+    """
+    Returns (path, variant) if a known SNI binary exists in the script directory,
+    where variant is 'rust' or 'go'. Returns (None, None) if not found.
+    """
+    rust_path = os.path.join(SCRIPT_DIR, SNI_RUST_BINARY)
+    go_path = os.path.join(SCRIPT_DIR, SNI_GO_BINARY)
+
+    if os.path.exists(rust_path):
+        return rust_path, "rust"
+    if os.path.exists(go_path):
+        return go_path, "go"
+    return None, None
+
+
+# ── Asset name resolution ──────────────────────────────────────────────────────
+
+
+def _get_sni_asset_name(variant):
+    machine = platform.machine().lower()
+
+    arch_map = {
+        "x86_64": "amd64",
+        "amd64": "amd64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+        "armv7l": "armv7",
+    }
+    arch = arch_map.get(machine)
+
+    if variant == "rust":
+        if not arch or arch == "armv7":
+            logger.error(f"Rust SNI binary not available for architecture: {machine}")
+            console.print(f"[red]Rust SNI binary not available for: {machine}[/red]")
+            return None, None
+
+        if sys.platform == "win32":
+            return f"sni-spoof-rs-windows-{arch}.zip", "zip"
+        elif sys.platform == "darwin":
+            return f"sni-spoof-rs-macos-{arch}", "binary"
+        else:
+            return f"sni-spoof-rs-linux-{arch}", "binary"
+
+    elif variant == "go":
+        if sys.platform == "win32":
+            return "sni-spoofing.exe", "binary"
+        elif sys.platform == "darwin":
+            if not arch or arch == "armv7":
+                logger.error(f"Go SNI binary not available for: {machine}")
+                console.print(f"[red]Go SNI binary not available for: {machine}[/red]")
+                return None, None
+            return f"sni-spoofing-darwin-{arch}", "binary"
+        else:
+            if not arch:
+                logger.error(f"Unsupported architecture: {machine}")
+                return None, None
+            if arch == "armv7":
+                return "sni-spoofing-linux-armv7", "binary"
+            return f"sni-spoofing-linux-{arch}", "binary"
+
+    return None, None
+
+
+# ── SNI config file creation ───────────────────────────────────────────────────────
+
+
+def create_sni_config(variant, connect=SNI_CONNECT, fake_sni=SNI_FAKE_SNI):
+    if variant == "rust":
+        config = {
+            "listeners": [
+                {
+                    "listen": f"0.0.0.0:{SNI_PORT}",
+                    "connect": connect,
+                    "fake_sni": fake_sni,
+                }
+            ]
+        }
+        with open(SNI_RUST_CONFIG, "w") as f:
+            json.dump(config, f, indent=2)
+        logger.info(f"Created Rust SNI config at {SNI_RUST_CONFIG}")
+        return SNI_RUST_CONFIG
+
+    elif variant == "go":
+        config = (
+            f"listen = 127.0.0.1:{SNI_PORT}\n"
+            f"connect = {connect}\n"
+            f"fake-sni = {fake_sni}\n"
+            "utls = firefox\n"
+            "fake-repeat = 1\n"
+            "fake-delay = 2ms\n"
+            "ack-timeout = 2s\n"
+            "injector = active\n"
+            "enable-fragment = false\n"
+            "fragment-delay = 500ms\n"
+            "sni-chunk = 3\n"
+        )
+        with open(SNI_GO_CONFIG, "w") as f:
+            f.write(config)
+        logger.info(f"Created Go SNI config at {SNI_GO_CONFIG}")
+        return SNI_GO_CONFIG
+
+    return None
+
+
+# ── Download SNI-Spoofing ───────────────────────────────────────────────────────────────────
+
+
+def _download_sni_binary(variant):
+    api_url = SNI_RUST_API if variant == "rust" else SNI_GO_API
+    dest_bin = SNI_RUST_BINARY if variant == "rust" else SNI_GO_BINARY
+    dest = os.path.join(SCRIPT_DIR, dest_bin)
+
+    try:
+        response = requests.get(api_url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        tag = data["tag_name"]
+        assets = data["assets"]
+    except Exception as e:
+        logger.error(f"Failed to fetch SNI release info: {e}")
+        console.print(f"[red]Failed to fetch release info: {e}[/red]")
+        return False
+
+    asset_name, asset_type = _get_sni_asset_name(variant)
+    if not asset_name:
+        return False
+
+    asset = next((a for a in assets if a["name"] == asset_name), None)
+    if not asset:
+        logger.error(f"Asset {asset_name} not found in release {tag}")
+        console.print(f"[red]Asset {asset_name} not found in release {tag}[/red]")
+        return False
+
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        download_path = os.path.join(tmp_dir, asset_name)
+        console.print(f"[cyan]Downloading {asset_name} ({tag})...[/cyan]")
+        logger.info(f"Downloading {asset_name} from {asset['browser_download_url']}")
+
+        with requests.get(asset["browser_download_url"], stream=True, timeout=60) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length", 0))
+            downloaded = 0
+            with open(download_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        print(
+                            f"\r  {downloaded / total * 100:.1f}%", end="", flush=True
+                        )
+        print()
+
+        if asset_type == "zip":
+            with zipfile.ZipFile(download_path, "r") as z:
+                z.extractall(tmp_dir)
+            extracted = os.path.join(tmp_dir, dest_bin)
+            if not os.path.exists(extracted):
+                logger.error("Binary not found inside zip")
+                console.print("[red]Binary not found inside zip[/red]")
+                return False
+            shutil.move(extracted, dest)
+        else:
+            shutil.move(download_path, dest)
+
+        if sys.platform != "win32":
+            os.chmod(
+                dest, os.stat(dest).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+            )
+
+        logger.info(f"SNI binary installed at {dest}")
+        console.print(f"[green]Downloaded to {dest}[/green]")
+        return True
+
+    except Exception as e:
+        logger.error(f"SNI download failed: {e}")
+        console.print(f"[red]Download failed: {e}[/red]")
+        return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ── SNI orchestrator ──────────────────────────────────────────────────────────
+def _get_launch_instructions(binary_path, config_path, variant):
+    if variant == "rust":
+        cmd = f"{binary_path} --config {config_path}"
+    else:
+        cmd = f"{binary_path} -c {config_path}"
+
+    if sys.platform == "win32":
+        return (
+            f"  1. Open Command Prompt or PowerShell as Administrator\n"
+            f"  2. Run:\n"
+            f"       {cmd}\n"
+        )
+    elif sys.platform == "darwin":
+        return (
+            f"  1. Open a new terminal window\n"
+            f"  2. Run:\n"
+            f"       sudo {cmd}\n"
+            f"  3. Enter your password when prompted\n"
+        )
+    else:
+        return (
+            f"  1. Open a new terminal window\n"
+            f"  2. Run:\n"
+            f"       sudo {cmd}\n"
+            f"  3. Enter your password when prompted\n"
+            f"  Tip: To run it in the background:\n"
+            f"       sudo nohup {cmd} &\n"
+        )
+
+
+def ensure_sni_spoofing(preferred_variant="rust"):
+    if is_port_in_use(SNI_PORT):
+        console.print(
+            f"[green]✓ Port {SNI_PORT} is active — SNI spoofing is running.[/green]"
+        )
+        logger.info(f"Port {SNI_PORT} already in use, SNI spoofing is running")
+        return
+
+    binary_path, variant = find_sni_binary()
+
+    if not binary_path:
+        console.print(
+            f"[yellow]⚠ SNI spoofing binary not found in {SCRIPT_DIR}[/yellow]"
+        )
+        console.print(f"[yellow]  Without it, none of the configs will work.[/yellow]")
+
+        answer = (
+            input(f"\nDownload SNI spoofing ({preferred_variant})? [Y/n]: ")
+            .strip()
+            .lower()
+        )
+        if answer in ("", "y", "yes"):
+            success = _download_sni_binary(preferred_variant)
+            if not success:
+                console.print("[red]Download failed. Exiting.[/red]")
+                sys.exit(1)
+            binary_path = os.path.join(
+                SCRIPT_DIR,
+                SNI_RUST_BINARY if preferred_variant == "rust" else SNI_GO_BINARY,
+            )
+            variant = preferred_variant
+        else:
+            console.print("[red]SNI spoofing is required. Exiting.[/red]")
+            sys.exit(1)
+
+    config_path = SNI_RUST_CONFIG if variant == "rust" else SNI_GO_CONFIG
+
+    if not os.path.exists(config_path):
+        console.print(
+            f"[yellow]SNI config not found, creating default at {config_path}[/yellow]"
+        )
+        logger.info(f"Creating default SNI config for {variant}")
+        create_sni_config(variant)
+
+    instructions = _get_launch_instructions(binary_path, config_path, variant)
+
+    console.print(
+        f"\n[yellow]⚠ SNI spoofing is not running (port {SNI_PORT} is free).[/yellow]"
+    )
+    console.print("[yellow]  Please start it in a separate terminal:[/yellow]\n")
+    console.print(f"[cyan]{instructions}[/cyan]")
+
+    console.print("[yellow]Waiting for SNI spoofing to start...[/yellow]")
+    logger.info(f"Waiting for user to start SNI spoofing on port {SNI_PORT}")
+
+    while True:
+        answer = (
+            input("Press Enter once it's running, or type 'q' to quit: ")
+            .strip()
+            .lower()
+        )
+        if answer == "q":
+            console.print("[red]Exiting.[/red]")
+            sys.exit(0)
+        if is_port_in_use(SNI_PORT):
+            console.print(f"[green]✓ Port {SNI_PORT} is active — continuing.[/green]")
+            logger.info(f"Port {SNI_PORT} now active, continuing")
+            return
+        console.print(
+            f"[red]Port {SNI_PORT} still not active. Please check the SNI process and try again.[/red]"
+        )
 
 
 # ── History management ─────────────────────────────────────────────────────────
@@ -1199,7 +1519,29 @@ if __name__ == "__main__":
         action="store_true",
         help="Download or update Xray to the latest version",
     )
+    parser.add_argument(
+        "--sni-variant",
+        choices=["rust", "go"],
+        default="rust",
+        help="SNI spoofing variant to use if download is needed (default: rust)",
+    )
+    parser.add_argument(
+        "--sni-connect",
+        type=str,
+        default=SNI_CONNECT,
+        help="Upstream connect address for SNI config (default: 104.19.229.21:443)",
+    )
+    parser.add_argument(
+        "--sni-fake",
+        type=str,
+        default=SNI_FAKE_SNI,
+        help="Fake SNI hostname (default: hcaptcha.com)",
+    )
     args = parser.parse_args()
+
+    SNI_CONNECT = args.sni_connect
+    SNI_FAKE_SNI = args.sni_fake
+    sni_proc = ensure_sni_spoofing(preferred_variant=args.sni_variant)
 
     SOCKS_PORT = args.port
     SPEED_TEST_SIZE = args.test_size

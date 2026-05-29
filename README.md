@@ -181,3 +181,4 @@ All tunable values are at the top of `balancer.py`:
 - `configs.txt`, the Xray binary, and all generated files are in `.gitignore` — never commit your configs
 - On Windows, make sure `curl` is in your PATH
 - Python 3.9 or newer is required (`tuple[bool, int]` type hint syntax)
+# SNI-balancer
