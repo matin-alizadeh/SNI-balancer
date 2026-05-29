@@ -78,7 +78,8 @@ CHECK_INTERVAL = 30 * 60
 
 # ── Scoring system weights ─────────────────────────────────────────────────────
 W_SPEED = 0.4
-W_STABILITY = 0.6
+W_STABILITY = 0.3
+W_LATENCY = 1 - W_SPEED - W_STABILITY
 SWITCH_THRESHOLD = 0.2
 HISTORY_WINDOW = 6
 
@@ -679,7 +680,7 @@ def calculate_score(
 
         final_score = (
             speed_score * W_SPEED
-            + latency_score * (1 - W_SPEED - W_STABILITY)
+            + latency_score * W_LATENCY
             + stability_score * W_STABILITY
         )
 
