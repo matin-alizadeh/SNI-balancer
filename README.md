@@ -1,184 +1,221 @@
-# xray-balancer
+# SNI-Balancer
 
-An intelligent, self-managing Xray proxy balancer. Tests a list of VLESS and Trojan configs by real download speed and latency, then automatically keeps the fastest one running as a LAN-accessible SOCKS5 proxy. Re-tests on a configurable interval and switches if a better config is found.
+An intelligent Xray config balancer for SNI-spoofing environments.
 
-No dependency on v2rayN or any other GUI client.
+SNI-Balancer continuously benchmarks VLESS and Trojan configs using real latency and download speed tests, scores them based on performance history and stability, then automatically keeps the best config running through Xray as a LAN-accessible SOCKS5 proxy.
 
-## How it works
+Designed for censorship-heavy networks where SNI spoofing is required.
 
-1. Reads configs from `configs.txt` — one URI per line, or subscription URLs
-2. For each config, spins up a temporary Xray instance on a private port
-3. Runs a two-stage test: health check (latency) → download speed test
-4. Scores each config using a weighted combination of speed, latency, and historical stability
-5. Launches a persistent Xray SOCKS5 proxy with the best config
-6. Re-tests on a configurable interval; only switches if the improvement exceeds a threshold
-7. Persists test history across restarts in `config_history.json`
+No GUI clients required. No manual switching. Fully automated.
 
-## Requirements
+---
 
-- Python 3.9+
-- `curl` (pre-installed on macOS and most Linux distros; download for Windows from [curl.se](https://curl.se/windows/))
-- Xray binary (see setup below)
+# Features
 
-## Setup
+* Automatic Xray download and update
+* Automatic SNI-spoofing binary management
+* Supports both Rust and Go SNI-spoofing backends
+* Real-world speed testing through actual proxy traffic
+* Latency-aware scoring system
+* Historical stability tracking
+* Exponential backoff for dead configs
+* Automatic failover and recovery
+* Subscription URL support
+* Cross-platform:
 
-**1. Clone the repo**
+  * Linux
+  * Windows
+  * macOS
+
+---
+
+# How It Works
+
+1. Reads configs from `configs.txt`
+2. Starts temporary isolated Xray instances for testing
+3. Performs:
+
+   * health checks
+   * latency measurement
+   * real download speed tests
+4. Calculates a weighted score using:
+
+   * speed
+   * latency
+   * historical stability
+5. Launches the highest-scoring config
+6. Continuously re-tests configs at configurable intervals
+7. Automatically switches only when improvement exceeds a threshold
+8. Persists history across restarts
+
+---
+
+# Supported Protocols
+
+| Protocol | Supported Transports                    |
+| -------- | --------------------------------------- |
+| VLESS    | WS, gRPC, xHTTP, HTTPUpgrade, SplitHTTP |
+| Trojan   | WS, gRPC, xHTTP, HTTPUpgrade, SplitHTTP |
+
+
+---
+
+# Requirements
+
+* Python 3.9+
+* `curl`
+* Internet access
+* SNI-spoofing backend
+
+---
+
+# Installation
+
+## Clone the repository
+
 ```bash
-git clone https://github.com/yourname/xray-balancer.git
-cd xray-balancer
+git clone https://github.com/hrostami/sni-balancer.git
+cd sni-balancer
 ```
 
-**2. Install Python dependencies**
-```bash
-pip3 install -r requirements.txt
-```
-
-**3. Add the Xray binary**
-
-Download the Xray binary for your platform from [XTLS/Xray-core releases](https://github.com/XTLS/Xray-core/releases) and place it in the project folder:
+## Install dependencies
 
 ```bash
-# macOS / Linux
-cp /path/to/xray ./xray
-chmod +x ./xray
-
-# Windows: place xray.exe in the project folder
+pip install -r requirements.txt
 ```
 
-**4. Create `configs.txt`**
+## Create `configs.txt`
 
-Add your proxy URIs one per line. Supports `vless://` and `trojan://` URIs and subscription URLs (plain-text or base64-encoded):
+Supports:
 
-```
-vless://uuid@host:port?...#name
-trojan://password@host:port?...#name
-https://your-subscription-url.com/sub
-```
+* `vless://`
+* `trojan://`
+* Subscription URLs
+* Base64 subscriptions
 
-Empty lines are ignored. Any address/port in the URI is automatically normalized to `127.0.0.1:40443` in the generated Xray config.
+Example:
 
-## Usage
-
-**Test all configs without launching Xray:**
-```bash
-python3 balancer.py --dry-run
+```text
+vless://uuid@host:port?...#MyConfig
+trojan://password@host:port?...#Server2
+https://subscription-url.example/sub
 ```
 
-**Run normally:**
+---
+
+# Running
+
+## Normal mode
+
 ```bash
 python3 balancer.py
 ```
 
-**Custom interval (e.g. every 5 minutes):**
+## Dry-run mode
+
+Tests all configs without launching the final Xray instance.
+
+```bash
+python3 balancer.py --dry-run
+```
+
+## Custom interval
+
 ```bash
 python3 balancer.py --interval 300
 ```
 
-**Custom SOCKS port:**
+## Custom SOCKS5 port
+
 ```bash
 python3 balancer.py --port 1080
 ```
 
-**Larger download test sample (more accurate, slower):**
+## Larger speed test
+
 ```bash
 python3 balancer.py --test-size 10
 ```
 
-**Custom configs file:**
+## Update Xray
+
 ```bash
-python3 balancer.py --configs /path/to/myconfigs.txt
+python3 balancer.py --update-xray
 ```
 
-**All options:**
-```
---dry-run           Test all configs and show results, do not launch Xray
---interval N        Seconds between re-test cycles (default: 1800)
---port N            SOCKS5 proxy port (default: 4567)
---configs PATH      Path to configs file (default: configs.txt in script folder)
---test-size N       Download test size in MB (default: 1)
---display-time N    Seconds to show full results table before countdown (default: 5)
-```
+---
 
-## Connecting other devices
+# Command Line Options
 
-Once running, configure any device on your LAN to use:
-```
-Protocol : SOCKS5
-Host     : <your machine's LAN IP>
-Port     : 4567  (or whatever --port you set)
-```
+| Argument         | Description                       |
+| ---------------- | --------------------------------- |
+| `--dry-run`      | Test configs only                 |
+| `--interval`     | Seconds between test cycles       |
+| `--configs`      | Custom configs file               |
+| `--port`         | SOCKS5 listen port                |
+| `--display-time` | Full dashboard display duration   |
+| `--test-size`    | Download test size in MB          |
+| `--update-xray`  | Download/update Xray              |
+| `--sni-variant`  | `rust` or `go`                    |
+| `--sni-connect`  | Upstream address for SNI spoofing |
+| `--sni-fake`     | Fake SNI hostname                 |
 
-To find your LAN IP:
-```bash
-# macOS / Linux
-ip addr show   # or: ifconfig
+---
 
-# Windows
-ipconfig
-```
+# SNI Spoofing
 
-## Scoring system
+This project requires an external SNI-spoofing process.
 
-Each config is scored using three weighted factors from its recent test history:
+Supported implementations:
 
-| Factor | Weight | Description |
-|---|---|---|
-| Speed | 40% | Average download speed across recent successful tests |
-| Latency | 30% | Average round-trip time from health checks |
-| Stability | 30% | Ratio of successful tests in the history window |
+* Rust backend
+* Go backend
 
-A switch only happens if the best candidate's score exceeds the current config's score by more than `SWITCH_THRESHOLD` (default: 20%). This prevents thrashing when two configs have similar performance.
+If the binary is missing, SNI-Balancer can automatically download it.
 
-Configs that fail repeatedly are subject to exponential backoff — they are skipped for increasing durations to avoid wasting time on dead servers.
+---
 
-## Supported protocols
+# Scoring System
 
-| Protocol | Transports |
-|---|---|
-| `vless` | WebSocket, xHTTP, gRPC, HTTPUpgrade, SplitHTTP |
-| `trojan` | WebSocket, xHTTP, gRPC, HTTPUpgrade, SplitHTTP |
+Each config receives a weighted score:
 
-TLS and REALITY security modes are supported. Flow control (`xtls-rprx-vision`) is supported for VLESS.
+| Metric    | Weight |
+| --------- | ------ |
+| Speed     | 40%    |
+| Stability | 30%    |
+| Latency   | 30%    |
 
-## Configuration constants
+The balancer avoids unnecessary switching by requiring a minimum improvement threshold before changing the active config.
 
-All tunable values are at the top of `balancer.py`:
+Repeated failures trigger exponential backoff to avoid wasting resources on dead servers.
 
-| Constant | Default | Description |
-|---|---|---|
-| `SOCKS_PORT` | `4567` | SOCKS5 proxy port |
-| `SOCKS_LISTEN` | `0.0.0.0` | Listen address (`0.0.0.0` = all interfaces) |
-| `SNI_PORT` | `40443` | Upstream tunnel port |
-| `TEST_URL` | Cloudflare 1MB | URL used for download speed test |
-| `HEALTH_URL` | gstatic 204 | URL used for health/latency checks |
-| `TEST_TIMEOUT` | `15` | Max seconds for download test |
-| `HEALTH_TIMEOUT` | `5` | Max seconds for health check |
-| `CHECK_INTERVAL` | `1800` | Seconds between re-test cycles |
-| `BASE_TEST_PORT` | `19000` | Starting port for temporary test instances |
-| `W_SPEED` | `0.4` | Weight for speed in scoring |
-| `W_STABILITY` | `0.6` | Weight for stability in scoring |
-| `SWITCH_THRESHOLD` | `0.2` | Minimum score improvement required to switch |
-| `HISTORY_WINDOW` | `6` | Number of past results to consider for scoring |
-| `DISPLAY_TOP_N_FULL` | `10` | Configs shown in full results view |
-| `DISPLAY_TOP_N_COMPACT` | `3` | Configs shown during countdown |
-| `PING_COUNT` | `3` | Number of pings averaged for latency |
-| `XRAY_STARTUP_WAIT` | `2.0` | Seconds to wait after launching Xray |
 
-## Files
+---
 
-| File | Description |
-|---|---|
-| `balancer.py` | Main script |
-| `configs.txt` | Your proxy URIs (not committed) |
-| `xray` / `xray.exe` | Xray binary (not committed) |
-| `xrayconfig.json` | Generated active Xray config (not committed) |
-| `config_history.json` | Persisted test history (not committed) |
-| `balancer.log` | Runtime log (not committed) |
+# Generated Files
 
-## Notes
+| File                  | Description               |
+| --------------------- | ------------------------- |
+| `xrayconfig.json`     | Active Xray config        |
+| `config_history.json` | Historical benchmark data |
+| `balancer.log`        | Runtime logs              |
+| `.xray_version`       | Installed Xray version    |
 
-- Press `Ctrl+C` to stop cleanly — Xray is always terminated on exit, including crashes
-- `configs.txt`, the Xray binary, and all generated files are in `.gitignore` — never commit your configs
-- On Windows, make sure `curl` is in your PATH
-- Python 3.9 or newer is required (`tuple[bool, int]` type hint syntax)
-# SNI-balancer
+---
+
+# Notes
+
+* The SOCKS5 proxy listens on all interfaces by default (`0.0.0.0`)
+* Temporary Xray instances are created during testing
+* Dead configs are skipped intelligently using exponential backoff
+* Xray is automatically relaunched if it crashes
+* Duplicate config names are automatically deduplicated
+* All generated files should remain ignored in Git
+
+---
+
+# Disclaimer
+
+This project is intended for educational and research purposes.
+
+Use responsibly and comply with local laws and regulations.
