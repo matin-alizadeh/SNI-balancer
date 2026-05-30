@@ -1,4 +1,5 @@
 # SNI-Balancer
+<img width="1464" height="891" alt="Dashboard" src="https://github.com/user-attachments/assets/2374b29d-a258-48e0-81af-7bd827018dee" />
 
 An intelligent Xray config balancer for SNI-spoofing method.
 
