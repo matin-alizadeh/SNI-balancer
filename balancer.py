@@ -1403,7 +1403,9 @@ def create_layout(ranked, current_best, interval, remaining_seconds=None):
     layout["header"].update(Panel(header_text, border_style="cyan"))
 
     # Body - Results table
-    table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
+    table = Table(
+        box=box.ROUNDED, show_header=True, header_style="bold cyan", expand=True
+    )
     table.add_column("#", style="dim", width=4)
     table.add_column("Config Name", style="cyan", width=30)
     table.add_column(f"Speed\n{SPEED_TEST_SIZE}MB test", justify="center", width=12)
