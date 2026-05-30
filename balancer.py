@@ -152,6 +152,16 @@ if sys.platform != "win32":
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
+
+def _get_lan_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
+
 # ── Optimized downloader ─────────────────────────────────────────────────────────
 
 
@@ -436,13 +446,18 @@ def create_sni_config(variant, connect=None, fake_sni=None):
         fake_sni = SNI_FAKE_SNI
     if variant == "rust":
         config = {
+            "graceful_shutdown_sec": 0,
             "listeners": [
                 {
-                    "listen": f"0.0.0.0:{SNI_PORT}",
+                    "listen": "127.0.0.1:40443",
                     "connect": connect,
                     "fake_sni": fake_sni,
+                    "conn_timeout_sec": 5,
+                    "handshake_timeout_sec": 2,
+                    "keepalive_time_sec": 11,
+                    "keepalive_interval_sec": 2,
                 }
-            ]
+            ],
         }
         with open(SNI_RUST_CONFIG, "w") as f:
             json.dump(config, f, indent=2)
@@ -1370,7 +1385,7 @@ def create_layout(ranked, current_best, interval, remaining_seconds=None):
     layout.split_column(
         Layout(name="header", size=3),
         Layout(name="body"),
-        Layout(name="footer", size=3),
+        Layout(name="footer", size=5),
     )
 
     # Header
@@ -1455,19 +1470,42 @@ def create_layout(ranked, current_best, interval, remaining_seconds=None):
     layout["body"].update(Panel(table, title="Config Performance", border_style="blue"))
 
     # Footer
-    footer_text = Text()
-    xray_status, xray_color = get_xray_status_text()
-    footer_text.append(xray_status, style=xray_color)
+    lan_ip = _get_lan_ip()
 
+    footer_table = Table.grid(padding=(0, 2))
+    footer_table.add_column()
+    footer_table.add_column()
+    footer_table.add_column()
+
+    xray_status, xray_color = get_xray_status_text()
+    status_text = Text(xray_status, style=xray_color)
     if current_best:
         current_entry = next((r for r in ranked if r[0]["name"] == current_best), None)
         if current_entry:
             display_name = current_entry[0].get(
                 "display_name", current_entry[0]["name"]
             )
-            footer_text.append(f"  |  Active: {display_name}", style="green")
+            status_text.append(f"  |  Active: {display_name}", style="green")
 
-    layout["footer"].update(Panel(footer_text, border_style="cyan"))
+    proxy_guide = Text()
+    proxy_guide.append("SOCKS5 Proxy Setup\n", style="bold yellow")
+    proxy_guide.append("Windows/Mac:  ", style="dim")
+    proxy_guide.append(
+        f"Settings → Proxy → SOCKS5  {lan_ip}:{SOCKS_PORT}", style="cyan"
+    )
+    proxy_guide.append("  |  ", style="dim")
+    proxy_guide.append("Android:  ", style="dim")
+    proxy_guide.append(
+        f"WiFi → Modify → Manual proxy  {lan_ip}:{SOCKS_PORT}", style="cyan"
+    )
+
+    lan_text = Text()
+    lan_text.append("LAN Address\n", style="bold yellow")
+    lan_text.append(f"{lan_ip}", style="bold green")
+    lan_text.append(f":{SOCKS_PORT}", style="bold cyan")
+
+    footer_table.add_row(status_text, proxy_guide, lan_text)
+    layout["footer"].update(Panel(footer_table, border_style="cyan"))
 
     return layout
 
